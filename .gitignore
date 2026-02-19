@@ -45,4 +45,3 @@ coverage.xml
 *.db
 .DS_Store
 Thumbs.db
-reports/
