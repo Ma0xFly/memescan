@@ -23,7 +23,8 @@ from core.web3_provider import get_async_web3
 from domain.models import Token
 
 # Uniswap V2 Factory — PairCreated(address indexed token0, address indexed token1, address pair, uint)
-PAIR_CREATED_TOPIC = AsyncWeb3.keccak(
+# ⚠️ .hex() 不带 0x 前缀，但 eth_getLogs 要求 topic 必须以 0x 开头
+PAIR_CREATED_TOPIC = "0x" + AsyncWeb3.keccak(
     text="PairCreated(address,address,address,uint256)"
 ).hex()
 
@@ -96,9 +97,17 @@ class MonitorService:
         if current_block <= self._last_block:
             return
 
+        # ⚡ 限制单次查询的区块范围
+        # Alchemy 免费版限制: eth_getLogs 单次最多查 10 个区块。
+        # 如果你升级了 Alchemy 套餐，可以把这个值改大（付费版支持 2000+）。
+        # 超出范围的区块会在下一轮轮询自动补上，不会丢事件。
+        MAX_BLOCK_RANGE = 10
+        from_block = self._last_block + 1
+        to_block = min(current_block, from_block + MAX_BLOCK_RANGE - 1)
+
         log_filter = {
-            "fromBlock": self._last_block + 1,
-            "toBlock": current_block,
+            "fromBlock": from_block,
+            "toBlock": to_block,
             "address": self._settings.uniswap_v2_factory,
             "topics": [PAIR_CREATED_TOPIC],
         }
@@ -108,13 +117,13 @@ class MonitorService:
         for log_entry in logs:
             await self._process_log(log_entry)
 
-        self._last_block = current_block
+        self._last_block = to_block
         if logs:
             logger.info(
                 "已处理 {} 个新交易对，区块范围 {}-{}",
                 len(logs),
-                self._last_block - (current_block - self._last_block),
-                current_block,
+                from_block,
+                to_block,
             )
 
     async def _process_log(self, log_entry: LogReceipt) -> None:
