@@ -12,21 +12,31 @@ from loguru import logger
 from core.config import get_settings
 
 class EtherscanService:
-    def __init__(self) -> None:
+    def __init__(self, chain_name: str = "ethereum") -> None:
         self.settings = get_settings()
-        self.base_url = "https://api.etherscan.io/api"
+        self.chain_name = chain_name
+        
+        # 根据链的不同切换域名，并始终使用 v1 endpoint，因为免费版 API 不再完全支持 v2
+        if chain_name == "bsc":
+            self.chain_id = 56
+            self.base_url = "https://api.bscscan.com/api"
+            self.api_key = self.settings.bscscan_api_key
+        else:
+            self.chain_id = 1
+            self.base_url = "https://api.etherscan.io/api"
+            self.api_key = self.settings.etherscan_api_key
     
     async def get_contract_source(self, address: str) -> str | None:
         """获取合约源码。"""
-        if not self.settings.etherscan_api_key:
-            logger.warning("Etherscan API key is missing. Skipping source code fetch.")
+        if not self.api_key:
+            logger.warning(f"API key for {self.chain_name} is missing. Skipping source code fetch.")
             return None
             
         params = {
             "module": "contract",
             "action": "getsourcecode",
             "address": address,
-            "apikey": self.settings.etherscan_api_key,
+            "apikey": self.api_key,
         }
         
         try:
@@ -48,14 +58,14 @@ class EtherscanService:
 
     async def get_abi(self, address: str) -> str | None:
         """获取合约 ABI。"""
-        if not self.settings.etherscan_api_key:
+        if not self.api_key:
             return None
             
         params = {
             "module": "contract",
             "action": "getabi",
             "address": address,
-            "apikey": self.settings.etherscan_api_key,
+            "apikey": self.api_key,
         }
         
         try:

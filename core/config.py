@@ -50,6 +50,7 @@ class AppSettings(BaseSettings):
     llm_base_url: str = "https://open.bigmodel.cn/api/paas/v4/"  # 智谱 GLM
     llm_model: str = "glm-4-flash"  # 智谱 GLM 模型
     etherscan_api_key: str = ""
+    bscscan_api_key: str = ""
 
     # ── Uniswap V2 Router ──────────────────────────────────────
     uniswap_v2_router: str = "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"

@@ -41,7 +41,10 @@ class ScannerAgent(BaseAgent):
         action = task.get("action", "start")
 
         if action == "start":
-            self._monitor = MonitorService(on_new_pair=self._on_new_pair)
+            self._monitor = MonitorService(
+                on_new_pair=self._on_new_pair, 
+                chain_name=self._chain_name
+            )
             self.log(f"启动 {self._chain_name} 链监控")
             await self._monitor.start()
             return {"status": "stopped"}  # start() 阻塞直到 stop

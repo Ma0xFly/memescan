@@ -26,9 +26,9 @@ from core.db import init_db
 from core.logging import setup_logging
 from core.web3_provider import check_connection
 from domain.models import AuditReport, Token
-from services.analyzer import AnalysisService
-from services.monitor import MonitorService
-from services.simulator import SimulationService
+from agents.coordinator import CoordinatorAgent
+from agents.scanner import ScannerAgent
+from agents.reporter import ReporterAgent
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -45,7 +45,7 @@ from services.simulator import SimulationService
 #   主线程渲染时把新数据同步到 session_state 用于展示。
 #
 
-_shared_reports: list[AuditReport] = []   # 后台线程写入, 主线程读取
+_shared_reports: list[dict] = []   # 后台线程写入, 主线程读取
 _shared_log: list[str] = []               # 后台线程写入, 主线程读取
 
 REPORTS_DIR = Path(__file__).resolve().parent / "reports"
@@ -68,7 +68,7 @@ st.set_page_config(
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 if "reports" not in st.session_state:
-    st.session_state.reports: list[AuditReport] = []
+    st.session_state.reports: list[dict] = []
 if "monitor_running" not in st.session_state:
     st.session_state.monitor_running: bool = False
 if "monitor_thread" not in st.session_state:
@@ -145,48 +145,37 @@ def _save_md_report(report: AuditReport) -> str:
 # 异步辅助函数（在后台线程执行，不能碰 session_state！）
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-async def _on_new_pair(token: Token) -> None:
-    """MonitorService 检测到新交易对时触发的回调。
-
-    ⚠️ 此函数在后台线程的事件循环中运行，所以只写入 _shared_*，
-       不碰 st.session_state。
-    """
-    log_msg = f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] 新交易对: {token.symbol} — {token.address[:16]}…"
+async def _on_new_pair(token: Token, chain_name: str = "ethereum") -> None:
+    """ScannerAgent 检测到新交易对时触发的回调。"""
+    log_msg = f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] 新交易对 ({chain_name}): {token.symbol} — {token.address[:16]}…"
     _shared_log.append(log_msg)
     logger.info(log_msg)
 
-    # 自动执行仿真和分析。
     try:
-        async with SimulationService() as sim:
-            result = await sim.simulate_buy_sell(token.address)
-
-        analyzer = AnalysisService()
-        report = await analyzer.analyze(token, result)
-
-        # 写入共享列表（主线程会同步到 session_state）
-        _shared_reports.append(report)
-
-        # 同时保存 MD 报告到 reports/ 目录
-        filename = _save_md_report(report)
-        _shared_log.append(f"  📄 报告已保存: {filename}")
-        logger.info("📄 报告已保存: {}", filename)
+        coordinator = CoordinatorAgent(chain_name=chain_name)
+        result = await coordinator.run({"token": token})
+        _shared_reports.append({
+            "report": result["report"],
+            "decisions": result["decisions"]
+        })
+        _shared_log.append(f"  📄 报告已保存: {result['file_path']}")
+        logger.info("📄 报告已保存: {}", result['file_path'])
     except Exception as exc:
         error_msg = f"[错误] 代币 {token.address[:16]}… 仿真失败: {exc}"
         _shared_log.append(error_msg)
         logger.error(error_msg)
 
 
-async def _manual_scan(token_address: str) -> AuditReport | None:
-    """对手动输入的代币地址执行一次性仿真 + 分析。"""
+async def _manual_scan(token_address: str, chain_name: str = "ethereum") -> dict | None:
+    """对手动输入的代币地址执行一次性编排审计。"""
     token = Token(address=token_address, pair_address="0x" + "0" * 40)
     try:
-        async with SimulationService() as sim:
-            result = await sim.simulate_buy_sell(token_address)
-        analyzer = AnalysisService()
-        report = await analyzer.analyze(token, result)
-        if report:
-            _save_md_report(report)
-        return report
+        coordinator = CoordinatorAgent(chain_name=chain_name)
+        result = await coordinator.run({"token": token})
+        return {
+            "report": result["report"],
+            "decisions": result["decisions"]
+        }
     except Exception as exc:
         logger.error("手动扫描失败: {}", exc)
         return None
@@ -223,10 +212,15 @@ def render_sidebar() -> None:
 
     # 监控控制
     st.sidebar.subheader("🔎 实时监控")
+    selected_chain = st.sidebar.selectbox("选择链", ["ethereum", "bsc"])
     if not st.session_state.monitor_running:
         if st.sidebar.button("▶️ 启动监控", use_container_width=True):
-            monitor = MonitorService(on_new_pair=_on_new_pair)
-            asyncio.run_coroutine_threadsafe(monitor.start(), loop)
+            # 将 chain_name 绑定到回调函数
+            from functools import partial
+            bound_callback = partial(_on_new_pair, chain_name=selected_chain)
+            scanner = ScannerAgent(on_new_pair=bound_callback, chain_name=selected_chain)
+            asyncio.run_coroutine_threadsafe(scanner.run({"action": "start"}), loop)
+            st.session_state.scanner = scanner
             st.session_state.monitor_running = True
             st.rerun()
     else:
@@ -234,6 +228,8 @@ def render_sidebar() -> None:
         col_stop, col_refresh = st.sidebar.columns(2)
         with col_stop:
             if st.button("⏹️ 停止", use_container_width=True):
+                if "scanner" in st.session_state:
+                    st.session_state.scanner.stop()
                 st.session_state.monitor_running = False
                 st.rerun()
         with col_refresh:
@@ -245,6 +241,7 @@ def render_sidebar() -> None:
 
     # 手动扫描
     st.sidebar.subheader("🎯 手动扫描")
+    manual_chain = st.sidebar.selectbox("选择链 (手动扫描)", ["ethereum", "bsc"], key="manual_chain")
     manual_addr = st.sidebar.text_input(
         "代币地址",
         placeholder="0x…",
@@ -253,7 +250,7 @@ def render_sidebar() -> None:
     if st.sidebar.button("🔬 扫描代币", use_container_width=True) and manual_addr:
         with st.sidebar.status("扫描中…", expanded=True):
             future = asyncio.run_coroutine_threadsafe(
-                _manual_scan(manual_addr), loop
+                _manual_scan(manual_addr, manual_chain), loop
             )
             try:
                 report = future.result(timeout=60)
@@ -277,8 +274,8 @@ def render_main() -> None:
     reports = st.session_state.reports
 
     total = len(reports)
-    honeypots = sum(1 for r in reports if r.simulation.is_honeypot)
-    dangerous = sum(1 for r in reports if r.is_dangerous)
+    honeypots = sum(1 for item in reports if item["report"].simulation.is_honeypot)
+    dangerous = sum(1 for item in reports if item["report"].is_dangerous)
     safe = total - dangerous
 
     col1.metric("📊 已扫描总数", total)
@@ -291,7 +288,9 @@ def render_main() -> None:
     # ── 审计报告列表 ────────────────────────────────────────────
     if reports:
         st.subheader("📋 审计报告")
-        for idx, report in enumerate(reports):
+        for idx, item in enumerate(reports):
+            report = item["report"]
+            decisions = item["decisions"]
             severity = "🔴" if report.is_dangerous else "🟡" if report.risk_score > 30 else "🟢"
             with st.expander(
                 f"{severity} {report.token.symbol} — 评分: {report.risk_score:.0f}/100 | {report.token.address[:20]}…",
@@ -322,6 +321,29 @@ def render_main() -> None:
 
                 if report.llm_summary:
                     st.info(f"**分析摘要:** {report.llm_summary}")
+                
+                st.info(f"**🤖 Agent 决策链路:** {' ➡️ '.join(decisions)}")
+
+    st.markdown("---")
+    st.subheader("💬 Chat with Contract")
+    user_question = st.chat_input("输入关于最新审计代币的问题...")
+    if user_question and reports:
+        current_report = reports[0]["report"]
+        reporter = ReporterAgent()
+        st.chat_message("user").write(user_question)
+        with st.spinner("AI 正在思考..."):
+            loop = get_or_create_loop()
+            future = asyncio.run_coroutine_threadsafe(
+                reporter.chat(user_question, current_report), loop
+            )
+            try:
+                answer = future.result(timeout=30)
+                st.chat_message("assistant").write(answer)
+            except Exception as e:
+                st.chat_message("assistant").write(f"⚠️ 查询超时或失败: {e}")
+    elif user_question:
+        st.chat_message("assistant").write("⚠️ 目前还没有任何审计报告，无法聊天。")
+
     else:
         st.info(
             "暂无报告。请从侧边栏启动实时监控或执行手动扫描。"

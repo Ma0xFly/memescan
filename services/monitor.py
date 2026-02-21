@@ -42,13 +42,21 @@ class MonitorService:
         await monitor.stop()
     """
 
-    def __init__(self, on_new_pair: PairCreatedCallback | None = None) -> None:
+    def __init__(self, on_new_pair: PairCreatedCallback | None = None, chain_name: str = "ethereum") -> None:
         self._settings = get_settings()
-        self._w3 = get_async_web3()
+        self._chain_name = chain_name
+        self._w3 = get_async_web3(chain_name)
         self._shutdown_event = asyncio.Event()
         self._on_new_pair = on_new_pair
         self._last_block: int = 0
         self._reconnect_attempts: int = 0
+        
+        if chain_name == "ethereum":
+            self.factory_address = self._settings.uniswap_v2_factory
+            self.weth_address = self._settings.weth_address
+        else:
+            self.factory_address = self._settings.bsc_factory
+            self.weth_address = self._settings.bsc_weth
 
     # ── 公共 API ────────────────────────────────────────────────
 
@@ -56,7 +64,8 @@ class MonitorService:
         """启动轮询循环。在调用 `stop()` 之前会持续阻塞。"""
         logger.info(
             "MonitorService 启动中",
-            factory=self._settings.uniswap_v2_factory,
+            chain=self._chain_name,
+            factory=self.factory_address,
             poll_interval=self._settings.poll_interval_secs,
         )
         # 从当前链头初始化。
@@ -84,7 +93,7 @@ class MonitorService:
 
         logger.info("MonitorService 已优雅停止")
 
-    async def stop(self) -> None:
+    def stop(self) -> None:
         """发出信号终止轮询循环。"""
         logger.info("MonitorService 收到关闭请求")
         self._shutdown_event.set()
@@ -107,7 +116,7 @@ class MonitorService:
         log_filter = {
             "fromBlock": from_block,
             "toBlock": to_block,
-            "address": self._settings.uniswap_v2_factory,
+            "address": self.factory_address,
             "topics": [PAIR_CREATED_TOPIC],
         }
 
@@ -137,7 +146,7 @@ class MonitorService:
             # data = abi.encode(pair_address, pair_id)
             pair_address = "0x" + data.hex()[24:64] if isinstance(data, bytes) else "0x" + data[26:66]
 
-            weth = self._settings.weth_address.lower()
+            weth = self.weth_address.lower()
             # 识别非 WETH 的代币。
             if token0.lower() == weth:
                 target_token_address = token1

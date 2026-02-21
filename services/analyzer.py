@@ -25,9 +25,10 @@ class AnalysisService:
     作为后续扩展计划。
     """
 
-    def __init__(self) -> None:
+    def __init__(self, chain_name: str = "ethereum") -> None:
+        self.chain_name = chain_name
         self._settings = get_settings()
-        self.w3 = get_async_web3()
+        self.w3 = get_async_web3(chain_name=chain_name)
 
     async def analyze(
         self, token: Token, simulation: SimulationResult
@@ -204,7 +205,7 @@ class AnalysisService:
 
         # 2. 尝试获取源码
         try:
-            etherscan = EtherscanService()
+            etherscan = EtherscanService(chain_name=self.chain_name)
             source_code = await etherscan.get_contract_source(token.address)
             
             if not source_code:

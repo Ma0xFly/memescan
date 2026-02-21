@@ -34,9 +34,10 @@ class AuditorAgent(BaseAgent):
 
     name = "AuditorAgent"
 
-    def __init__(self) -> None:
-        self._analyzer = AnalysisService()
-        self._etherscan = EtherscanService()
+    def __init__(self, chain_name: str = "ethereum") -> None:
+        self.chain_name = chain_name
+        self._analyzer = AnalysisService(chain_name=chain_name)
+        self._etherscan = EtherscanService(chain_name=chain_name)
         self._settings = get_settings()
         self._llm_client = None
 
@@ -208,7 +209,8 @@ class AuditorAgent(BaseAgent):
                 max_tokens=500,
                 temperature=0.3,
             )
-            result = response.choices[0].message.content.strip()
+            msg = response.choices[0].message.content
+            result = msg.strip() if msg else ""
             self.log(f"LLM 分析完成 ({len(result)} 字)")
             return result
         except Exception as e:

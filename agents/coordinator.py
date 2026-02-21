@@ -32,9 +32,10 @@ class CoordinatorAgent(BaseAgent):
 
     name = "CoordinatorAgent"
 
-    def __init__(self) -> None:
+    def __init__(self, chain_name: str = "ethereum") -> None:
+        self.chain_name = chain_name
         self.sandbox = SandboxAgent()
-        self.auditor = AuditorAgent()
+        self.auditor = AuditorAgent(chain_name=chain_name)
         self.reporter = ReporterAgent()
 
     async def run(self, task: dict[str, Any]) -> dict[str, Any]:
@@ -52,6 +53,14 @@ class CoordinatorAgent(BaseAgent):
         token: Token = task["token"]
         decisions: list[str] = []
 
+        if token.symbol == "???":
+            from services.token_info import TokenInfoService
+            try:
+                svc = TokenInfoService(chain_name=self.chain_name)
+                token = await svc.fetch_metadata(token.address, token.pair_address)
+            except Exception as e:
+                self.log(f"获取代币元数据失败: {e}")
+
         self.log(f"开始审计代币: {token.symbol or '???'} ({token.address[:10]}…)")
 
         # ── Step 1: 沙盒仿真 ────────────────────────────────
@@ -65,6 +74,7 @@ class CoordinatorAgent(BaseAgent):
             decisions.append("simulation_failed → skip_deep_analysis")
             from domain.models import SimulationResult
             simulation = SimulationResult(
+                token_address=token.address,
                 can_buy=False,
                 can_sell=False,
                 buy_tax_pct=0.0,

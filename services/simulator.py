@@ -169,17 +169,23 @@ class SimulationService:
     #   8. 卖出税 = (预期 ETH - 实际 ETH) / 预期 ETH × 100%
     #
 
-    async def simulate_buy_sell(self, token_address: str) -> SimulationResult:
+    async def simulate_buy_sell(self, token: Any, amount_eth: str = "0.1") -> SimulationResult:
         """在 Anvil 分叉上仿真目标代币的完整买入→批准→卖出流程。
 
         参数:
-            token_address: 待测试的 ERC-20 代币地址。
+            token: 待测试的 ERC-20 代币地址 (str 或 Token 对象)。
+            amount_eth: 测试买入的 ETH 数量 (默认为 0.1)。
 
         返回:
             SimulationResult — 包含税率、蜜罐检测和 Gas 数据。
         """
         if self._anvil_process is None:
             raise AnvilProcessError("Anvil 未在运行。请先调用 fork_mainnet()。")
+
+        token_address = token.address if hasattr(token, "address") else token
+        
+        from web3 import AsyncWeb3
+        buy_amount_wei = str(AsyncWeb3.to_wei(float(amount_eth), "ether"))
 
         rpc = f"http://127.0.0.1:{self._anvil_port}"
         weth = self._settings.weth_address
@@ -215,7 +221,7 @@ class SimulationService:
             expected_tokens = await self._get_amounts_out(
                 rpc=rpc,
                 router=router,
-                amount_in=self.BUY_AMOUNT_WEI,
+                amount_in=buy_amount_wei,
                 path=f"[{weth},{token_address}]",
             )
             if expected_tokens is None or expected_tokens == 0:
@@ -238,7 +244,7 @@ class SimulationService:
                 args=["0", f"[{weth},{token_address}]", sender, "9999999999"],
                 sender=sender,
                 private_key=pk,
-                value=self.BUY_AMOUNT_WEI,
+                value=buy_amount_wei,
             )
 
             if not buy_receipt["success"]:

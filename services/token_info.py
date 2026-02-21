@@ -64,8 +64,9 @@ ERC20_ABI_MINIMAL = [
 ]
 
 class TokenInfoService:
-    def __init__(self) -> None:
-        self.w3 = get_async_web3()
+    def __init__(self, chain_name: str = "ethereum") -> None:
+        self.chain_name = chain_name
+        self.w3 = get_async_web3(chain_name)
 
     async def fetch_metadata(self, address: str, pair_address: str) -> Token:
         """从链上获取代币元数据并返回 Token 对象。"""
