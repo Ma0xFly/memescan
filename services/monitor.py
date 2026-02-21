@@ -100,7 +100,6 @@ class MonitorService:
         # ⚡ 限制单次查询的区块范围
         # Alchemy 免费版限制: eth_getLogs 单次最多查 10 个区块。
         # 如果你升级了 Alchemy 套餐，可以把这个值改大（付费版支持 2000+）。
-        # 超出范围的区块会在下一轮轮询自动补上，不会丢事件。
         MAX_BLOCK_RANGE = 10
         from_block = self._last_block + 1
         to_block = min(current_block, from_block + MAX_BLOCK_RANGE - 1)

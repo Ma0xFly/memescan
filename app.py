@@ -4,6 +4,10 @@ app.py — Streamlit 仪表盘入口（The Rug-Pull Radar）
 在后台守护线程中运行 MonitorService（使用独立的 asyncio 事件循环），
 同时 Streamlit 在主线程中管理 UI 渲染。
 
+🔧 重要设计: 后台线程不能访问 st.session_state！
+   因此用模块级列表 (_shared_reports, _shared_log) 作为线程间共享存储，
+   主线程每次渲染时从共享列表同步到 session_state。
+
 启动方式: `streamlit run app.py`
 """
 
@@ -12,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 
 import streamlit as st
 from loguru import logger
@@ -24,6 +29,26 @@ from domain.models import AuditReport, Token
 from services.analyzer import AnalysisService
 from services.monitor import MonitorService
 from services.simulator import SimulationService
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🔧 线程安全的共享存储
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#
+# 为什么不用 st.session_state？
+#   Streamlit 的 session_state 绑定在主线程的 ScriptRunContext 上。
+#   后台线程（MonitorService 的回调）无法访问它，会抛出:
+#     "st.session_state has no attribute ... missing ScriptRunContext"
+#
+# 解决方案:
+#   用模块级 Python 列表存数据（GIL 保证 append 是线程安全的），
+#   主线程渲染时把新数据同步到 session_state 用于展示。
+#
+
+_shared_reports: list[AuditReport] = []   # 后台线程写入, 主线程读取
+_shared_log: list[str] = []               # 后台线程写入, 主线程读取
+
+REPORTS_DIR = Path(__file__).resolve().parent / "reports"
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -52,6 +77,31 @@ if "event_loop" not in st.session_state:
     st.session_state.event_loop: asyncio.AbstractEventLoop | None = None
 if "scan_log" not in st.session_state:
     st.session_state.scan_log: list[str] = []
+if "synced_count" not in st.session_state:
+    st.session_state.synced_count: int = 0
+
+
+def _sync_shared_to_session() -> bool:
+    """将后台线程写入的共享数据同步到 session_state。
+
+    返回: 是否有新数据需要刷新页面。
+    """
+    changed = False
+
+    # 同步报告
+    if len(_shared_reports) > st.session_state.synced_count:
+        new_reports = _shared_reports[st.session_state.synced_count:]
+        for r in new_reports:
+            st.session_state.reports.insert(0, r)
+        st.session_state.synced_count = len(_shared_reports)
+        changed = True
+
+    # 同步日志
+    if len(_shared_log) > len(st.session_state.scan_log):
+        st.session_state.scan_log = list(_shared_log)
+        changed = True
+
+    return changed
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -76,13 +126,33 @@ def get_or_create_loop() -> asyncio.AbstractEventLoop:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 异步辅助函数
+# Markdown 报告保存
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def _save_md_report(report: AuditReport) -> str:
+    """保存审计报告为 Markdown 文件，返回文件名。"""
+    from scripts.pipeline import generate_markdown_report
+    REPORTS_DIR.mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{timestamp}_{report.token.symbol}_{report.token.address[:10]}.md"
+    filepath = REPORTS_DIR / filename
+    md = generate_markdown_report(report.token, report)
+    filepath.write_text(md, encoding="utf-8")
+    return filename
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 异步辅助函数（在后台线程执行，不能碰 session_state！）
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def _on_new_pair(token: Token) -> None:
-    """MonitorService 检测到新交易对时触发的回调。"""
+    """MonitorService 检测到新交易对时触发的回调。
+
+    ⚠️ 此函数在后台线程的事件循环中运行，所以只写入 _shared_*，
+       不碰 st.session_state。
+    """
     log_msg = f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] 新交易对: {token.symbol} — {token.address[:16]}…"
-    st.session_state.scan_log.append(log_msg)
+    _shared_log.append(log_msg)
     logger.info(log_msg)
 
     # 自动执行仿真和分析。
@@ -92,10 +162,17 @@ async def _on_new_pair(token: Token) -> None:
 
         analyzer = AnalysisService()
         report = await analyzer.analyze(token, result)
-        st.session_state.reports.insert(0, report)
+
+        # 写入共享列表（主线程会同步到 session_state）
+        _shared_reports.append(report)
+
+        # 同时保存 MD 报告到 reports/ 目录
+        filename = _save_md_report(report)
+        _shared_log.append(f"  📄 报告已保存: {filename}")
+        logger.info("📄 报告已保存: {}", filename)
     except Exception as exc:
         error_msg = f"[错误] 代币 {token.address[:16]}… 仿真失败: {exc}"
-        st.session_state.scan_log.append(error_msg)
+        _shared_log.append(error_msg)
         logger.error(error_msg)
 
 
@@ -106,7 +183,10 @@ async def _manual_scan(token_address: str) -> AuditReport | None:
         async with SimulationService() as sim:
             result = await sim.simulate_buy_sell(token_address)
         analyzer = AnalysisService()
-        return await analyzer.analyze(token, result)
+        report = await analyzer.analyze(token, result)
+        if report:
+            _save_md_report(report)
+        return report
     except Exception as exc:
         logger.error("手动扫描失败: {}", exc)
         return None
@@ -173,7 +253,7 @@ def render_sidebar() -> None:
                 report = future.result(timeout=60)
                 if report:
                     st.session_state.reports.insert(0, report)
-                    st.sidebar.success("扫描完成！")
+                    st.sidebar.success("扫描完成！报告已保存到 reports/ 目录")
                 else:
                     st.sidebar.error("扫描失败 — 请查看日志。")
             except Exception as exc:
@@ -248,6 +328,11 @@ def render_main() -> None:
         log_text = "\n".join(st.session_state.scan_log[-50:])
         st.code(log_text, language="text")
 
+    # ── 同步后台监控数据（仅在有新数据时刷新页面）──────────────
+    if st.session_state.monitor_running:
+        if _sync_shared_to_session():
+            st.rerun()
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 主入口
@@ -260,6 +345,9 @@ def main() -> None:
     # 初始化数据库表（通过后台事件循环执行）。
     loop = get_or_create_loop()
     asyncio.run_coroutine_threadsafe(init_db(), loop)
+
+    # 同步后台数据到 session_state
+    _sync_shared_to_session()
 
     render_sidebar()
     render_main()
