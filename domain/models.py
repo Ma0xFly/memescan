@@ -49,6 +49,8 @@ class Token(BaseModel):
     pair_address: str = Field(..., description="DEX 流动性交易对地址")
     deployer: str = Field(default="", description="合约部署者地址")
     total_supply: Optional[str] = Field(default=None, description="原始总供应量")
+    liquidity_eth: Optional[float] = Field(default=None, description="ETH 流动性池规模")
+    holder_count: Optional[int] = Field(default=None, description="持币地址数")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator("address", "pair_address", "deployer", mode="before")

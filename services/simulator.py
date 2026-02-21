@@ -651,14 +651,16 @@ class SimulationService:
         """
         try:
             cleaned = raw.strip()
+            if not cleaned:
+                return 0
             # 如果包含空格（如 "12345 [1.23e4]"），只取空格前的数字
             if " " in cleaned:
                 cleaned = cleaned.split()[0]
             # 去掉可能残留的方括号、逗号
             cleaned = cleaned.strip("[], ")
-            return int(cleaned)
+            return int(cleaned) if cleaned else 0
         except (ValueError, TypeError):
-            logger.warning("解析 {} 失败，原始值: {}", label, raw)
+            logger.warning("解析 {} 失败，原始值: '{}'", label, raw)
             return 0
 
     @staticmethod

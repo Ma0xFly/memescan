@@ -35,6 +35,8 @@ class TokenRecord(Base):
     pair_address: Mapped[str] = mapped_column(String(42), index=True, nullable=False)
     deployer: Mapped[str] = mapped_column(String(42), default="")
     total_supply: Mapped[str | None] = mapped_column(String(78), nullable=True)
+    liquidity_eth: Mapped[float | None] = mapped_column(Float, nullable=True)
+    holder_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

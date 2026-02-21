@@ -13,6 +13,8 @@ from __future__ import annotations
 from loguru import logger
 
 from core.config import get_settings
+from core.web3_provider import get_async_web3
+from services.etherscan import EtherscanService
 from domain.models import AuditReport, RiskFlag, SimulationResult, Token
 
 
@@ -25,6 +27,7 @@ class AnalysisService:
 
     def __init__(self) -> None:
         self._settings = get_settings()
+        self.w3 = get_async_web3()
 
     async def analyze(
         self, token: Token, simulation: SimulationResult
@@ -38,7 +41,11 @@ class AnalysisService:
         返回:
             包含风险评分、标签和可选 LLM 叙述的 AuditReport。
         """
-        flags = self._evaluate_rules(simulation)
+        # 异步执行链上检查
+        is_renounced = await self._check_ownership(token.address)
+        has_mint = await self._detect_mint_function(token.address)
+
+        flags = self._evaluate_rules(simulation, is_renounced, has_mint)
         score = self._compute_score(flags, simulation)
         summary = await self._generate_summary(token, simulation, flags, score)
 
@@ -58,9 +65,61 @@ class AnalysisService:
         )
         return report
 
+    async def _check_ownership(self, token_address: str) -> bool:
+        """检查合约所有权是否已放弃 (Renounced)。
+        
+        尝试调用 `owner()` (0x8da5cb5b)。
+        如果调用失败（无此方法）或返回零地址/死地址，则认为已放弃。
+        """
+        try:
+            # owner() selector: 0x8da5cb5b
+            # We use call directly or contract instance. 
+            # Using call with raw data is faster/simpler if we don't have ABI.
+            data = "0x8da5cb5b"
+            result = await self.w3.eth.call(
+                {"to": self.w3.to_checksum_address(token_address), "data": data}
+            )
+            # Result is bytes. If empty, maybe revert?
+            if not result or all(b == 0 for b in result):
+                return True # Returned 0x0...0
+            
+            # Check if it's the dead address (0x000...dEaD) or zero address
+            # The result is 32 bytes (64 hex chars). Address is last 20 bytes.
+            # But let's simplify: if it's 0x0...0, it's renounced.
+            # Converting to int
+            owner_int = int.from_bytes(result, byteorder='big')
+            return owner_int == 0 or owner_int == 0xdead
+            
+        except Exception:
+            # If call reverts, it might not have owner() or it's restricted.
+            # Assuming if no owner() function, it's effectively renounced (immutable?)
+            # Or it uses a different ownership pattern.
+            # For safety, let's assume if we CAN'T read owner, it's NOT renounced (unknown risk)?
+            # Or standard OpenZeppelin: if owner() missing, maybe Ownable not used.
+            # Let's return True (pass) if function missing, but log warning?
+            # Requirement: "Call owner() ... if 0x0 or dead -> True".
+            return False 
+
+    async def _detect_mint_function(self, token_address: str) -> bool:
+        """检测字节码中是否存在 mint 函数签名 (0x40c10f19)。"""
+        try:
+            code = await self.w3.eth.get_code(self.w3.to_checksum_address(token_address))
+            # mint(address,uint256) -> 0x40c10f19
+            # mint(uint256) -> 0xa0712d68
+            # simply check for hex sequence
+            code_hex = code.hex()
+            return "40c10f19" in code_hex
+        except Exception:
+            return False
+
     # ── 规则引擎 ────────────────────────────────────────────────
 
-    def _evaluate_rules(self, sim: SimulationResult) -> list[RiskFlag]:
+    def _evaluate_rules(
+        self, 
+        sim: SimulationResult, 
+        is_renounced: bool, 
+        has_mint: bool
+    ) -> list[RiskFlag]:
         """将确定性风险规则应用于仿真结果。"""
         flags: list[RiskFlag] = []
 
@@ -81,6 +140,12 @@ class AnalysisService:
         # Gas 异常（极高的 Gas 通常意味着链上陷阱）
         if sim.buy_gas > 500_000:
             flags.append(RiskFlag.UNKNOWN_RISK)
+
+        if not is_renounced:
+            flags.append(RiskFlag.OWNERSHIP_NOT_RENOUNCED)
+
+        if has_mint and not is_renounced:
+            flags.append(RiskFlag.HIDDEN_MINT)
 
         return flags
 
@@ -128,11 +193,78 @@ class AnalysisService:
     ) -> str:
         """生成人类可读的分析摘要。
 
-        TODO: 替换为基于 RAG 的 LLM 流水线：
-          1. 从 Etherscan 获取已验证的合约源码。
-          2. 对源码进行分块和向量化。
-          3. 结合仿真上下文 + 源码块查询 LLM。
+        如果配置了 OpenAI API Key 且 Etherscan 可获取源码，则调用 LLM 进行深度分析。
+        否则使用基于规则的默认摘要。
         """
+        # 1. 默认规则摘要
+        default_summary = self._default_summary(token, sim, flags, score)
+        
+        if not self._settings.openai_api_key:
+            return default_summary
+
+        # 2. 尝试获取源码
+        try:
+            etherscan = EtherscanService()
+            source_code = await etherscan.get_contract_source(token.address)
+            
+            if not source_code:
+                return default_summary + " (未找到已验证的合约源码，跳过 LLM 分析)"
+            
+            # 3. 调用 LLM
+            # 截断源码以防过长 (GPT-4o-mini context window is large but let's be safe/cost-effective)
+            truncated_source = source_code[:12000] 
+            
+            prompt = f"""
+            角色：资深智能合约安全审计专家。
+            任务：分析以下 ERC-20 代币合约源码，识别潜在的安全风险（如蜜罐、隐藏增发、高税率、权限过大等）。
+            
+            上下文信息：
+            - 代币地址: {token.address}
+            - 仿真结果: 能买={sim.can_buy}, 能卖={sim.can_sell}
+            - 测得税率: 买入 {sim.buy_tax_pct}%, 卖出 {sim.sell_tax_pct}%
+            - 风险标签: {[f.value for f in flags]}
+            - 风险评分: {score}/100
+            
+            合约源码（部分）：
+            ```solidity
+            {truncated_source}
+            ```
+            
+            要求：
+            1. 简要总结合约的主要功能和逻辑。
+            2. 重点分析是否存在恶意代码或后门（如 `onlyOwner` 限制转账、修改税率无上限、黑名单等）。
+            3. 结合仿真结果给出最终的安全评价。
+            4. 输出语言：中文。
+            5. 字数控制在 300 字以内。
+            """
+            
+            from openai import AsyncOpenAI
+            client = AsyncOpenAI(api_key=self._settings.openai_api_key)
+            
+            response = await client.chat.completions.create(
+                model=self._settings.llm_model,
+                messages=[
+                    {"role": "system", "content": "你是一个专业的区块链安全审计助手。"},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=500,
+                temperature=0.3,
+            )
+            
+            llm_result = response.choices[0].message.content.strip()
+            return f"{default_summary}\n\n🤖 **AI 深度分析**:\n{llm_result}"
+
+        except Exception as e:
+            logger.error(f"LLM analysis failed: {e}")
+            return default_summary + " (AI 分析服务暂时不可用)"
+
+    def _default_summary(
+        self,
+        token: Token,
+        sim: SimulationResult,
+        flags: list[RiskFlag],
+        score: float,
+    ) -> str:
         if not flags:
             return (
                 f"代币 {token.symbol} ({token.address[:10]}…) 通过了基本仿真检查。"

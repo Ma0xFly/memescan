@@ -47,6 +47,7 @@ class AppSettings(BaseSettings):
 
     # ── LLM / 分析 ─────────────────────────────────────────────
     openai_api_key: str = ""
+    etherscan_api_key: str = ""
     llm_model: str = "gpt-4o-mini"
 
     # ── 路径 ────────────────────────────────────────────────────
