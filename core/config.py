@@ -46,9 +46,20 @@ class AppSettings(BaseSettings):
     reconnect_base_delay_secs: float = 1.0
 
     # ── LLM / 分析 ─────────────────────────────────────────────
-    openai_api_key: str = ""
+    llm_api_key: str = ""  # GLM / DeepSeek / OpenAI API Key
+    llm_base_url: str = "https://open.bigmodel.cn/api/paas/v4/"  # 智谱 GLM
+    llm_model: str = "glm-4-flash"  # 智谱 GLM 模型
     etherscan_api_key: str = ""
-    llm_model: str = "gpt-4o-mini"
+
+    # ── Uniswap V2 Router ──────────────────────────────────────
+    uniswap_v2_router: str = "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"
+
+    # ── BSC 链 (多链支持) ──────────────────────────────────────
+    bsc_rpc_url: str = ""
+    bsc_chain_id: int = 56
+    bsc_factory: str = "0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73"
+    bsc_weth: str = "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c"  # WBNB
+    bsc_router: str = "0x10ED43C718714eb63d5aA57B78B54704E256024E"  # PancakeSwap
 
     # ── 路径 ────────────────────────────────────────────────────
     log_dir: Path = Path("./logs")

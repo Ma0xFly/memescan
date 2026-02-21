@@ -199,7 +199,7 @@ class AnalysisService:
         # 1. 默认规则摘要
         default_summary = self._default_summary(token, sim, flags, score)
         
-        if not self._settings.openai_api_key:
+        if not self._settings.llm_api_key:
             return default_summary
 
         # 2. 尝试获取源码
@@ -210,8 +210,7 @@ class AnalysisService:
             if not source_code:
                 return default_summary + " (未找到已验证的合约源码，跳过 LLM 分析)"
             
-            # 3. 调用 LLM
-            # 截断源码以防过长 (GPT-4o-mini context window is large but let's be safe/cost-effective)
+            # 3. 调用 LLM (兼容 GLM / DeepSeek / OpenAI)
             truncated_source = source_code[:12000] 
             
             prompt = f"""
@@ -239,7 +238,10 @@ class AnalysisService:
             """
             
             from openai import AsyncOpenAI
-            client = AsyncOpenAI(api_key=self._settings.openai_api_key)
+            client = AsyncOpenAI(
+                api_key=self._settings.llm_api_key,
+                base_url=self._settings.llm_base_url,
+            )
             
             response = await client.chat.completions.create(
                 model=self._settings.llm_model,

@@ -231,9 +231,15 @@ def render_sidebar() -> None:
             st.rerun()
     else:
         st.sidebar.info("监控运行中…")
-        if st.sidebar.button("⏹️ 停止监控", use_container_width=True):
-            st.session_state.monitor_running = False
-            st.rerun()
+        col_stop, col_refresh = st.sidebar.columns(2)
+        with col_stop:
+            if st.button("⏹️ 停止", use_container_width=True):
+                st.session_state.monitor_running = False
+                st.rerun()
+        with col_refresh:
+            if st.button("🔄 刷新", use_container_width=True):
+                _sync_shared_to_session()
+                st.rerun()
 
     st.sidebar.markdown("---")
 
@@ -328,10 +334,14 @@ def render_main() -> None:
         log_text = "\n".join(st.session_state.scan_log[-50:])
         st.code(log_text, language="text")
 
-    # ── 同步后台监控数据（仅在有新数据时刷新页面）──────────────
+    # ── 同步后台监控数据 ──────────────────────────────────────
     if st.session_state.monitor_running:
-        if _sync_shared_to_session():
-            st.rerun()
+        _sync_shared_to_session()
+        # 每 30 秒自动刷新，确保新扫描结果能显示出来
+        st.markdown(
+            '<meta http-equiv="refresh" content="30">',
+            unsafe_allow_html=True,
+        )
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
