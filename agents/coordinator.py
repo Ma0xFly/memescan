@@ -36,7 +36,7 @@ class CoordinatorAgent(BaseAgent):
         self.chain_name = chain_name
         self.sandbox = SandboxAgent()
         self.auditor = AuditorAgent(chain_name=chain_name)
-        self.reporter = ReporterAgent()
+        self.reporter = ReporterAgent(chain_name=chain_name)
 
     async def run(self, task: dict[str, Any]) -> dict[str, Any]:
         """完整审计流程: 仿真 → 审计 → 报告。

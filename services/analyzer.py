@@ -50,9 +50,14 @@ class AnalysisService:
         score = self._compute_score(flags, simulation)
         summary = await self._generate_summary(token, simulation, flags, score)
 
+        # The token/simulation objects might come from a different module reload (Streamlit quirk)
+        # Re-cast them to the current classes to avoid Pydantic validation errors
+        safe_token = Token.model_validate(token, from_attributes=True)
+        safe_simulation = SimulationResult.model_validate(simulation, from_attributes=True)
+        
         report = AuditReport(
-            token=token,
-            simulation=simulation,
+            token=safe_token,
+            simulation=safe_simulation,
             risk_score=score,
             risk_flags=flags,
             llm_summary=summary,

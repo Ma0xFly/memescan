@@ -62,8 +62,16 @@ class SimulationService:
     def __init__(self) -> None:
         self._settings = get_settings()
         self._anvil_process: asyncio.subprocess.Process | None = None
-        self._anvil_port: int = self._settings.anvil_port
+        self._anvil_port: int = self._find_free_port()
         self._fork_url: str = self._settings.rpc_url
+
+    @staticmethod
+    def _find_free_port() -> int:
+        """动态查找一个可用端口，避免端口冲突。"""
+        import socket
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("", 0))
+            return s.getsockname()[1]
 
     # ── 上下文管理器 ────────────────────────────────────────────
     #

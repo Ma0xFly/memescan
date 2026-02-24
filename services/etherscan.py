@@ -16,14 +16,14 @@ class EtherscanService:
         self.settings = get_settings()
         self.chain_name = chain_name
         
-        # 根据链的不同切换域名，并始终使用 v1 endpoint，因为免费版 API 不再完全支持 v2
+        # Etherscan 强制升级了 V2 API，V1 免费端点已废弃
         if chain_name == "bsc":
             self.chain_id = 56
-            self.base_url = "https://api.bscscan.com/api"
+            self.base_url = "https://api.bscscan.com/v2/api"
             self.api_key = self.settings.bscscan_api_key
         else:
             self.chain_id = 1
-            self.base_url = "https://api.etherscan.io/api"
+            self.base_url = "https://api.etherscan.io/v2/api"
             self.api_key = self.settings.etherscan_api_key
     
     async def get_contract_source(self, address: str) -> str | None:
@@ -33,6 +33,7 @@ class EtherscanService:
             return None
             
         params = {
+            "chainid": str(self.chain_id),
             "module": "contract",
             "action": "getsourcecode",
             "address": address,
@@ -62,6 +63,7 @@ class EtherscanService:
             return None
             
         params = {
+            "chainid": str(self.chain_id),
             "module": "contract",
             "action": "getabi",
             "address": address,

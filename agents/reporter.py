@@ -20,7 +20,8 @@ class ReporterAgent(BaseAgent):
 
     name = "ReporterAgent"
 
-    def __init__(self) -> None:
+    def __init__(self, chain_name: str = "ethereum") -> None:
+        self.chain_name = chain_name
         self._settings = get_settings()
         self._llm_client = None
 
@@ -126,6 +127,11 @@ class ReporterAgent(BaseAgent):
         else:
             level = "🟢 低风险"
 
+        # 根据链名称设定显示文案
+        chain_display = "BSC (BNB Chain)" if self.chain_name == "bsc" else "Ethereum Mainnet"
+        currency = "BNB" if self.chain_name == "bsc" else "ETH"
+        dex_name = "PancakeSwap V2 Router" if self.chain_name == "bsc" else "Uniswap V2 Router"
+        
         # 风险标签
         if report.risk_flags:
             flags_section = "\n".join(
@@ -148,7 +154,7 @@ class ReporterAgent(BaseAgent):
 | **代币符号** | {token.symbol or '???'} |
 | **代币地址** | `{token.address}` |
 | **交易对地址** | `{token.pair_address}` |
-| **所在链** | Ethereum Mainnet |
+| **所在链** | {chain_display} |
 
 ---
 
@@ -188,8 +194,8 @@ class ReporterAgent(BaseAgent):
 ## ⚙️ 仿真参数
 
 - 仿真引擎: Foundry Anvil (主网分叉)
-- 买入金额: 0.1 ETH
-- DEX: Uniswap V2 Router
+- 买入金额: 0.1 {currency}
+- DEX: {dex_name}
 - 分析引擎: MemeScan V2 Multi-Agent
 - 仿真时间: {now}
 
