@@ -14,7 +14,9 @@ app.py — Streamlit 仪表盘入口（The Rug-Pull Radar）
 from __future__ import annotations
 
 import asyncio
+import re
 import threading
+from urllib.parse import urlparse
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -49,6 +51,35 @@ _shared_reports: list[dict] = []   # 后台线程写入, 主线程读取
 _shared_log: list[str] = []               # 后台线程写入, 主线程读取
 
 
+def _redact_sensitive_text(text: str) -> str:
+    """对前端日志进行脱敏，避免泄露本地路径和 RPC 密钥。"""
+    if not text:
+        return text
+
+    redacted = text
+    redacted = re.sub(r"/home/[^/\s]+", "~", redacted)
+    redacted = re.sub(r"--fork-url\s+https?://\S+", "--fork-url ***RPC_URL***", redacted)
+    redacted = re.sub(
+        r"https://[^/\s]+\.alchemy\.com/v2/[a-zA-Z0-9_-]+",
+        "https://eth-mainnet.g.alchemy.com/v2/***",
+        redacted,
+    )
+    redacted = re.sub(
+        r"https://[a-zA-Z0-9_-]+\.infura\.io/v3/[a-zA-Z0-9_-]+",
+        "https://mainnet.infura.io/v3/***",
+        redacted,
+    )
+    redacted = re.sub(r"(?i)(api[-_ ]?key=)[^&\s]+", r"\1***", redacted)
+    return redacted
+
+
+def _safe_rpc_display(rpc_url: str) -> str:
+    parsed = urlparse(rpc_url)
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return "***"
+
+
 def _ui_log_sink(message) -> None:
     """Loguru 自定义 sink：将 Agent/Service 的关键日志推送到前端事件日志。
 
@@ -67,12 +98,8 @@ def _ui_log_sink(message) -> None:
     # 格式化为简洁的前端显示
     time_str = record["time"].strftime("%H:%M:%S")
     text = str(record["message"]).strip()
-    _shared_log.append(f"[{time_str}] {text}")
+    _shared_log.append(f"[{time_str}] {_redact_sensitive_text(text)}")
 
-
-# 注册 sink（只注册一次，避免重复）
-from loguru import logger as _loguru_logger
-_loguru_logger.add(_ui_log_sink, level="INFO", enqueue=False)
 
 REPORTS_DIR = Path(__file__).resolve().parent / "reports"
 
@@ -94,21 +121,44 @@ st.set_page_config(
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 if "reports" not in st.session_state:
-    st.session_state.reports: list[dict] = []
+    st.session_state.reports = []
 if "monitor_running" not in st.session_state:
-    st.session_state.monitor_running: bool = False
+    st.session_state.monitor_running = False
 if "monitor_thread" not in st.session_state:
-    st.session_state.monitor_thread: threading.Thread | None = None
+    st.session_state.monitor_thread = None
 if "event_loop" not in st.session_state:
-    st.session_state.event_loop: asyncio.AbstractEventLoop | None = None
+    st.session_state.event_loop = None
 if "scan_log" not in st.session_state:
-    st.session_state.scan_log: list[str] = []
+    st.session_state.scan_log = []
 if "synced_disk_files" not in st.session_state:
     # 启动时，将磁盘上现有的所有报告标记为已同步，这样它们只出现在“历史报告”中，而不会污染“实时报告”标签
     initial_files = set(f.name for f in REPORTS_DIR.glob("*.md")) if REPORTS_DIR.exists() else set()
-    st.session_state.synced_disk_files: set = initial_files
+    st.session_state.synced_disk_files = initial_files
 if "synced_count" not in st.session_state:
-    st.session_state.synced_count: int = 0
+    st.session_state.synced_count = 0
+if "manual_scan_dialog_open" not in st.session_state:
+    st.session_state.manual_scan_dialog_open = False
+if "manual_scan_state" not in st.session_state:
+    st.session_state.manual_scan_state = {}
+if "ui_log_sink_id" not in st.session_state:
+    st.session_state.ui_log_sink_id = None
+
+
+def _ensure_ui_log_sink() -> None:
+    from loguru import logger as _loguru_logger
+
+    existing_id = st.session_state.get("ui_log_sink_id")
+    if existing_id is not None:
+        try:
+            _loguru_logger.remove(existing_id)
+        except Exception:
+            pass
+
+    st.session_state.ui_log_sink_id = _loguru_logger.add(
+        _ui_log_sink,
+        level="INFO",
+        enqueue=False,
+    )
 
 
 def _sync_shared_to_session() -> bool:
@@ -221,10 +271,11 @@ async def _on_new_pair(token: Token, chain_name: str = "ethereum") -> None:
             "report": result["report"],
             "decisions": result["decisions"]
         })
-        _shared_log.append(f"  📄 报告已保存: {result['file_path']}")
+        saved_name = Path(result["file_path"]).name
+        _shared_log.append(f"  📄 报告已保存: reports/{saved_name}")
         logger.info("📄 报告已保存: {}", result['file_path'])
     except Exception as exc:
-        error_msg = f"[错误] 代币 {token.address[:16]}… 仿真失败: {exc}"
+        error_msg = _redact_sensitive_text(f"[错误] 代币 {token.address[:16]}… 仿真失败: {exc}")
         _shared_log.append(error_msg)
         logger.error(error_msg)
 
@@ -244,9 +295,112 @@ async def _manual_scan(token_address: str, chain_name: str = "ethereum") -> dict
         return None
 
 
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # UI 布局
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@st.dialog("🛡️ MemeScan 深度安全分析", width="large")
+def show_scan_dialog(loop: asyncio.AbstractEventLoop):
+    state = st.session_state.manual_scan_state
+    token_address = state.get("token_address", "")
+    chain_name = state.get("chain_name", "ethereum")
+
+    if not token_address:
+        st.session_state.manual_scan_dialog_open = False
+        st.session_state.manual_scan_state = {}
+        st.rerun()
+
+    st.markdown(f"**目标代币:** `{token_address}` | **网络:** `{chain_name.upper()}`")
+
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stButton"] button[kind="primary"] {
+            background-color: #00C853 !important;
+            border-color: #00C853 !important;
+            color: white !important;
+            font-weight: 700 !important;
+        }
+        div[data-testid="stButton"] button[kind="primary"]:hover {
+            background-color: #00E676 !important;
+            border-color: #00E676 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    status_text = st.empty()
+    log_container = st.empty()
+
+    if state.get("future") is None:
+        state["log_snapshot"] = len(_shared_log)
+        state["logs"] = [_redact_sensitive_text(f"[{datetime.now().strftime('%H:%M:%S')}] 已提交扫描任务，正在初始化...")]
+        state["result_applied"] = False
+        state["future"] = asyncio.run_coroutine_threadsafe(
+            _manual_scan(token_address, chain_name), loop
+        )
+
+    future = state["future"]
+    log_snapshot = int(state.get("log_snapshot", len(_shared_log)))
+    logs_to_show: list[str] = list(state.get("logs", []))
+
+    import time as _time
+    status_text.info("⏳ 正在调度多智能体，初始化沙盒...")
+
+    while not future.done():
+        _time.sleep(0.4)
+        new_entries = _shared_log[log_snapshot:]
+        if new_entries:
+            logs_to_show.extend(new_entries)
+            log_snapshot = len(_shared_log)
+            log_container.code("\n".join(logs_to_show), language="text")
+
+    final_entries = _shared_log[log_snapshot:]
+    if final_entries:
+        logs_to_show.extend(final_entries)
+        log_snapshot = len(_shared_log)
+
+    state["logs"] = logs_to_show
+    state["log_snapshot"] = log_snapshot
+
+    if not logs_to_show:
+        logs_to_show = [
+            f"[{datetime.now().strftime('%H:%M:%S')}] 扫描进行中，等待日志输出...",
+            "若该状态持续，请检查 RPC 连接与节点可用性。",
+        ]
+
+    log_container.text_area(
+        "深度安全分析",
+        value="\n".join(logs_to_show),
+        height=420,
+        disabled=True,
+        label_visibility="visible",
+        key="manual_scan_deep_analysis_text_area",
+    )
+
+    if not state.get("result_applied", False):
+        try:
+            report = future.result()
+            if report:
+                st.session_state.reports.insert(0, report)
+                status_text.success("✅ 多智能体审计完成！分析报告已生成。")
+            else:
+                status_text.error("❌ 扫描失败，请检查日志。")
+        except Exception as exc:
+            status_text.error(f"❌ 运行错误: {_redact_sensitive_text(str(exc))}")
+        state["result_applied"] = True
+    else:
+        status_text.success("✅ 多智能体审计完成！可点击下方按钮返回报告大盘。")
+
+    st.markdown("---")
+    if st.button("🟢 了解，返回报告大盘", use_container_width=True, type="primary"):
+        st.session_state.manual_scan_dialog_open = False
+        st.session_state.manual_scan_state = {}
+        st.rerun()
+
 
 def render_sidebar() -> None:
     """侧边栏：控制面板和状态显示。"""
@@ -276,7 +430,7 @@ def render_sidebar() -> None:
 
     display_rpc = settings.rpc_url if selected_chain == "ethereum" else settings.bsc_rpc_url
     display_chain_id = settings.chain_id if selected_chain == "ethereum" else settings.bsc_chain_id
-    st.sidebar.caption(f"RPC: `{display_rpc[:40]}…`")
+    st.sidebar.caption(f"RPC: `{_safe_rpc_display(display_rpc)}`")
     st.sidebar.caption(f"链 ID: `{display_chain_id}`")
     if not st.session_state.monitor_running:
         if st.sidebar.button("▶️ 启动监控", use_container_width=True):
@@ -312,35 +466,22 @@ def render_sidebar() -> None:
         placeholder="0x…",
         key="manual_address",
     )
-    if st.sidebar.button("🔬 扫描代币", use_container_width=True) and manual_addr:
-        import time as _time
-        log_snapshot = len(_shared_log)  # 记录扫描前的日志位置
-        future = asyncio.run_coroutine_threadsafe(
-            _manual_scan(manual_addr, manual_chain), loop
-        )
-        with st.sidebar.status("⏳ 扫描中…", expanded=True) as status:
-            while not future.done():
-                # 每 0.5 秒检查一次新日志并显示在状态框中
-                _time.sleep(0.5)
-                new_entries = _shared_log[log_snapshot:]
-                if new_entries:
-                    for entry in new_entries:
-                        st.write(entry)
-                    log_snapshot = len(_shared_log)
-            # 扫描完成后，刷出最后的日志
-            final_entries = _shared_log[log_snapshot:]
-            for entry in final_entries:
-                st.write(entry)
-            try:
-                report = future.result()
-                if report:
-                    st.session_state.reports.insert(0, report)
-                    status.update(label="✅ 扫描完成", state="complete")
-                else:
-                    status.update(label="❌ 扫描失败", state="error")
-            except Exception as exc:
-                status.update(label=f"❌ 错误: {exc}", state="error")
+
+    scan_busy = bool(st.session_state.manual_scan_dialog_open)
+    if st.sidebar.button("🔬 扫描代币", use_container_width=True, disabled=scan_busy) and manual_addr:
+        st.session_state.manual_scan_dialog_open = True
+        st.session_state.manual_scan_state = {
+            "token_address": manual_addr.strip(),
+            "chain_name": manual_chain,
+            "future": None,
+            "logs": [],
+            "log_snapshot": len(_shared_log),
+            "result_applied": False,
+        }
         st.rerun()
+
+    if scan_busy:
+        st.sidebar.caption("当前有扫描任务进行中，请先完成再发起新扫描。")
 
 
 def _load_reports_from_disk() -> dict[str, list[dict]]:
@@ -519,15 +660,19 @@ def render_main() -> None:
     if st.session_state.scan_log:
         st.markdown("---")
         st.subheader("📜 事件日志")
-        log_text = "\n".join(st.session_state.scan_log[-50:])
+        log_text = "\n\n".join(st.session_state.scan_log[-50:])
         st.code(log_text, language="text")
 
     # ── 同步后台监控数据 ──────────────────────────────────────
     if st.session_state.monitor_running:
         _sync_shared_to_session()
         # 自动刷新，确保新扫描结果能显示出来
-        from streamlit_autorefresh import st_autorefresh
-        st_autorefresh(interval=10000, limit=None, key="monitor_refresh")
+        try:
+            import importlib
+            mod = importlib.import_module("streamlit_autorefresh")
+            mod.st_autorefresh(interval=10000, limit=None, key="monitor_refresh")
+        except ModuleNotFoundError:
+            pass
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -540,6 +685,8 @@ def main() -> None:
         setup_logging()
         st.session_state.logger_init = True
 
+    _ensure_ui_log_sink()
+
     # 初始化数据库表（通过后台事件循环执行）。
     loop = get_or_create_loop()
     asyncio.run_coroutine_threadsafe(init_db(), loop)
@@ -549,6 +696,9 @@ def main() -> None:
 
     render_sidebar()
     render_main()
+
+    if st.session_state.manual_scan_dialog_open:
+        show_scan_dialog(loop)
 
 
 if __name__ == "__main__":

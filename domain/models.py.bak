@@ -81,10 +81,6 @@ class SimulationResult(BaseModel):
     is_honeypot: bool = False
     revert_reason: Optional[str] = None
     error_message: Optional[str] = None
-    rug_pull_replayed: bool = False
-    rug_pull_method: Optional[str] = None
-    rug_pull_success: bool = False
-
     simulated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator("token_address", mode="before")

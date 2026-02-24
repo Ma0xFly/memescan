@@ -126,7 +126,11 @@ class SimulationService:
         if self._settings.anvil_block_time > 0:
             cmd.extend(["--block-time", str(self._settings.anvil_block_time)])
 
-        logger.info("正在启动 Anvil: {}", " ".join(cmd))
+        safe_cmd = [
+            "--fork-url ***RPC_URL***" if part == self._fork_url else part
+            for part in cmd
+        ]
+        logger.info("正在启动 Anvil: {}", " ".join(safe_cmd))
 
         self._anvil_process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -239,6 +243,8 @@ class SimulationService:
                 )
             logger.info("📊 预期买入: {} {}", self._fmt_token(expected_tokens, decimals), symbol)
 
+            token_before = await self._get_token_balance(rpc, token_address, sender)
+
             # ── 步骤 2: 执行买入 ───────────────────────────────────
             #
             # 🆕 用 cast send 而不是 cast call！
@@ -273,7 +279,8 @@ class SimulationService:
             # 如果代币有隐藏税，你实际拿到的量会比 getAmountsOut 预测的少。
             # 差值就是税。
             #
-            actual_tokens = await self._get_token_balance(rpc, token_address, sender)
+            token_after = await self._get_token_balance(rpc, token_address, sender)
+            actual_tokens = token_after - token_before
             logger.info("📊 实际收到: {} {} (预期: {})", self._fmt_token(actual_tokens, decimals), symbol, self._fmt_token(expected_tokens, decimals))
 
             if expected_tokens > 0 and actual_tokens >= 0:
@@ -685,3 +692,101 @@ class SimulationService:
             if "revert" in lower or "error" in lower:
                 return line.strip()
         return None
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 🆕 高级沙盒漏洞重放 (Impersonation & State Manipulation)
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    async def impersonate_account(self, account: str) -> bool:
+        """强制 Anvil 节点解锁指定账户，无需私钥即可代表该账户发交易。"""
+        if self._anvil_process is None:
+            return False
+
+        rpc = f"http://127.0.0.1:{self._anvil_port}"
+        cast_bin = shutil.which("cast")
+        if cast_bin is None:
+            return False
+
+        cmd = [
+            cast_bin, "rpc",
+            "--rpc-url", rpc,
+            "anvil_impersonateAccount",
+            account
+        ]
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=5.0)
+            logger.debug(f"Impersonate account {account}: stdout={stdout_bytes.decode().strip()} stderr={stderr_bytes.decode().strip()}")
+            return process.returncode == 0
+        except Exception as e:
+            logger.warning("账户劫持 (Impersonation) 失败: {}", e)
+            return False
+
+    async def cast_send_unlocked(
+        self,
+        *,
+        to: str,
+        sig: str,
+        args: list[str],
+        sender: str,
+    ) -> dict[str, Any]:
+        """执行 cast send — 发送交易，无需私钥（前提是该 sender 已经被 impersonate）。"""
+        cast_bin = shutil.which("cast")
+        if cast_bin is None:
+            raise AnvilProcessError("在 PATH 中未找到 cast 二进制文件。")
+
+        rpc = f"http://127.0.0.1:{self._anvil_port}"
+        cmd: list[str] = [
+            cast_bin, "send",
+            "--rpc-url", rpc,
+            "--unlocked",
+            "--from", sender,
+            "--json",
+            to,
+            sig,
+            *args,
+        ]
+
+        logger.debug("执行 cast send (Unlocked): {} {} {}", to[:10], sig.split("(")[0], args)
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                process.communicate(),
+                timeout=float(self._settings.simulation_timeout_secs),
+            )
+        except asyncio.TimeoutError:
+            return {"success": False, "gas_used": 0, "revert_reason": "cast send unlocked 超时"}
+
+        stdout = stdout_bytes.decode().strip()
+        stderr = stderr_bytes.decode().strip()
+
+        if process.returncode != 0:
+            revert_reason = self._extract_revert_reason(stderr) or stderr[:256]
+            return {"success": False, "gas_used": 0, "revert_reason": revert_reason}
+
+        gas_used = 0
+        try:
+            receipt = json.loads(stdout)
+            if isinstance(receipt, dict):
+                status = receipt.get("status", "0x0")
+                gas_used = int(receipt.get("gasUsed", "0x0"), 16)
+                if status != "0x1":
+                    return {
+                        "success": False,
+                        "gas_used": gas_used,
+                        "revert_reason": "交易 Revert（status=0x0）",
+                    }
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.warning("解析 cast send unlocked 回执失败: {}", exc)
+
+        return {"success": True, "gas_used": gas_used, "revert_reason": None}

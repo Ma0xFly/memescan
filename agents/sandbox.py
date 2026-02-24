@@ -91,7 +91,85 @@ class SandboxAgent(BaseAgent):
         async with _anvil_lock:
             try:
                 async with SimulationService() as sim:
-                    return await sim.simulate_buy_sell(token, amount)
+                    result = await sim.simulate_buy_sell(token, amount)
+                    if result and not result.is_honeypot:
+                        result = await self._try_rug_pull_replay(sim, token, result)
+                    return result
             except Exception as e:
                 self.log_error(f"仿真失败: {e}")
                 return None
+
+    async def _try_rug_pull_replay(
+        self, sim: SimulationService, token: Token, base_result: SimulationResult
+    ) -> SimulationResult:
+        """尝试扮演项目方恶意提权并重放跑路攻击。"""
+        # 我们优先读取合约的 owner
+        owner_address = await sim._cast_call_raw(
+            rpc=f"http://127.0.0.1:{sim._anvil_port}",
+            to=token.address,
+            sig="owner()(address)",
+            args=[]
+        )
+        
+        # 解析 cast_call_raw 返回的地址
+        if owner_address and "0x" in owner_address:
+            # 取最后 40 位
+            owner_address = "0x" + owner_address[-40:]
+            if owner_address == "0x0000000000000000000000000000000000000000":
+                owner_address = token.deployer
+        else:
+            owner_address = token.deployer
+
+        if not owner_address or owner_address == "0x0000000000000000000000000000000000000000":
+            return base_result
+
+        self.log(f"⚔️ [攻防演练] 锁定 Owner 权限: {owner_address[:10]}...")
+        
+        success = await sim.impersonate_account(owner_address)
+        if not success:
+            self.log("⚠️ [提权失败] 无法接管该账户。")
+            return base_result
+            
+        self.log("✅ [成功] 已在沙盒中提权为 Owner！")
+
+        attack_payloads = [
+            {"sig": "setBlacklist(address,bool)", "args": [SimulationService.ANVIL_SENDER, "true"], "desc": "拉黑买家"},
+            {"sig": "blacklistAddress(address,bool)", "args": [SimulationService.ANVIL_SENDER, "true"], "desc": "拉黑买家"},
+            {"sig": "setTaxFeePercent(uint256)", "args": ["99"], "desc": "修改税率为99%"},
+            {"sig": "setTax(uint256)", "args": ["99"], "desc": "修改税率为99%"},
+            {"sig": "setFees(uint256,uint256)", "args": ["99", "99"], "desc": "修改买卖税率为99%"},
+            {"sig": "pauseTrading()", "args": [], "desc": "暂停交易"},
+        ]
+
+        rug_success = False
+        
+        for payload in attack_payloads:
+            self.log(f"😈 [执行] 尝试调用 {payload['sig']}")
+            receipt = await sim.cast_send_unlocked(
+                to=token.address,
+                sig=payload["sig"],
+                args=payload["args"],
+                sender=owner_address
+            )
+            
+            if receipt["success"]:
+                # 验证是否成功阻断交易
+                verify_result = await sim.simulate_buy_sell(token, "0.01")
+                
+                if verify_result.is_honeypot or verify_result.sell_tax_pct > 90:
+                    self.log(f"🔴 [实锤] 用户已无法卖出筹码！🚨 判定为蜜罐！")
+                    rug_success = True
+                    
+                    return base_result.model_copy(update={
+                        "is_honeypot": True,
+                        "revert_reason": f"Rug-Pull 演练实锤: {payload['desc']}",
+                        "rug_pull_replayed": True,
+                        "rug_pull_method": payload["sig"],
+                        "rug_pull_success": True
+                    })
+
+        if not rug_success:
+            self.log("🛡️ [演练结束] 尝试了常见恶意后门，暂未攻破。")
+            return base_result.model_copy(update={"rug_pull_replayed": True})
+
+        return base_result

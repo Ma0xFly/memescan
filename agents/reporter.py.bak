@@ -185,7 +185,7 @@ class ReporterAgent(BaseAgent):
 
 ---
 
-{rug_pull_section}## 🧪 仿真结果
+## 🧪 仿真结果
 
 | 项目 | 结果 |
 |------|------|
