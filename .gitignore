@@ -45,3 +45,11 @@ coverage.xml
 *.db
 .DS_Store
 Thumbs.db
+
+# ── MemeScan 特定 ──────────────────────────────────────────
+logs/
+*.bak
+fix_*.py
+patch*.py
+rewrite_*.py
+style_patch.py

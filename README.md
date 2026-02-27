@@ -1,161 +1,318 @@
-# 🔍 MemeScan V2 — The Rug-Pull Radar (Multi-Agent System)
+# 🔍 MemeScan — The Rug-Pull Radar
 
-**基于多智能体协作与 Anvil 分叉仿真的实时 Memecoin 安全分析系统。**
-
-MemeScan V2 已经从单向的工具流水线，升级为了具有自主决策能力的 Multi-Agent 系统。系统支持 Ethereum 主网和 BSC 双链实时监控，并深度集成了大语言模型（LLM）提供智能合约源码审计和交互式分析。
+**基于多智能体（Multi-Agent）协作与 Anvil 分叉仿真的实时 Memecoin 安全分析系统。**
 
 ---
 
-## 🌟 V2 核心亮点
+## 📖 项目概述
 
-- **🤖 多智能体架构**: Coordinator 统一调度，Scanner 负责监控，Sandbox 执行仿真，Auditor 深度分析代码，Reporter 出具报告。
-- **🌐 双链支持**: 一键切换 Ethereum (Uniswap V2) 和 BSC (PancakeSwap V2) 的监控与扫描。
-- **🧠 智能审计 (LLM)**: 集成七牛云 / 智谱 GLM API。Auditor Agent 可自主获取合约源码喂给大模型分析，揪出隐藏黑名单、增发漏洞。
-- **💬 Chat with Contract**: 直接在前端对刚生成的审计报告提问，AI 帮你解答代码风险。
-- **🔒 并发防爆锁**: Sandbox 引入进程级协程锁，完美解决并发扫币时的 Anvil 端口冲突问题。
-- **⚡ 无缝刷新**: 大盘采用无感刷新技术 (`st_autorefresh`)，后台跑日志，前台不闪烁。
-- **⚔️ 攻防演练 (Rug-Pull Replay)**: 突破静态审计局限，基于 Anvil 强大的分叉重放能力，在本地沙盒中扮演“黑客/项目方”角色。直接提权并模拟恶意的提款、增发和拉黑操作，通过动态推演让高级貔貅盘无所遁形。
+MemeScan 是一款面向 Web3 安全领域的智能合约审计工具。  
+它能够**实时监听**链上新发行的 Meme 代币，通过在本地 Anvil 沙盒中进行**买卖仿真交易**来检测蜜罐（Honeypot）和高税率代币，并调用大语言模型（LLM）对开源合约代码进行深度审计，最终生成结构化的安全评估报告。
 
----
+### 🧠 核心理念
 
-## 🔮 深度解密：可视化“跑路”沙盘推演实现原理
+> **"不只是告诉你代码有漏洞，更在沙盒中直接实操给你看。"**
 
-MemeScan V2 不仅仅是“告诉你”代码有漏洞，更是要在本地沙盒中直接“实操”给你看，从而彻底打破复杂貔貅盘（Honeypot）在常规条件下的隐蔽性。其核心基于以下多智能体协同流水线实现：
+MemeScan 独创的 **Rug-Pull 攻防推演系统**，能够在本地分叉网络中模拟"恶意项目方"角色，尝试执行拉黑、改税率、暂停交易等恶意操作，**用物理级证据判定**一个代币是否为资金盘。
 
-### 1. 权限劫持与账户伪装 (Impersonation)
-- **底层原理**: 依赖 Foundry/Anvil 节点引擎的 `anvil_impersonateAccount` 特权 RPC 接口。
-- **Agent 动作**: Sandbox Agent 在本地极速分叉网络（Forked Network）中，**无需提供任何真实私钥**，即可在 EVM 层面强制接管代币合约的 Owner、Deployer 或特权管理员地址，获取最高控制权。
+### 🎯 解决的问题
 
-### 2. 自动化恶意提权与攻击向量生成 (Attack Vectors)
-- **底层原理**: 结合大模型 (LLM) 静态代码分析与 ABI 编码技术。
-- **Agent 动作**: Auditor Agent 初步阅读源码后，若发现诸如 `setTax()`, `pauseTrading()`, `blacklist(address)`, 或隐藏的 `mint()` 函数，会将其提取入“高危函数白名单”。Sandbox Agent 随后根据此名单生成模拟 Payload，自动扮演“准备跑路的邪恶项目方”发起链上调用。
-
-### 3. 交易后置状态断言 (State Verification)
-- **底层原理**: 针对 EVM 状态树的实盘交叉比对。
-- **Agent 动作**: 当“模拟跑路”交易（如改税率、撤池子）上链后，系统自动再次发起基准的买入/卖出仿真测试。一旦探测到：买入税率突变为 99%、模拟买家因被拉黑导致 `transfer` 报 revert、或流动性池资金归零，系统便获得了“确系资金盘”的物理级实锤证据。
-
-### 4. 前端动态推演时间线 (UI Timeline)
-- **底层原理**: Streamlit 实时状态共享（`st_autorefresh` 与模块级共享内存）。
-- **界面展示**: 将后台隐晦的节点日志解构重组为极具视觉冲击力的时间线。用户在大盘上可直观看到演练全过程：
-  > *“✅ [成功] 锁定 Owner 权限 ➡️ 😈 [执行] 尝试调用 setTaxFee(99, 99) ➡️ 🔴 [实锤] 用户已无法卖出筹码 ➡️ 🚨 判定为蜜罐！”* 
-  
-  为 Web3 安全分析提供无可辩驳、一目了然的安全预警体验。
+| 问题 | MemeScan 方案 |
+|------|-------------|
+| 新发代币无审计报告 | 实时监控 + 自动审计流水线 |
+| 蜜罐骗局难以识别 | Anvil 沙盒买卖仿真，真实模拟交易 |
+| 静态审计无法发现隐藏后门 | 攻防推演：提权 Owner 并重放恶意调用 |
+| 合约代码阅读门槛高 | LLM 大模型自动分析源码，输出人类可读报告 |
+| 单链局限 | 同时支持 Ethereum 和 BSC 双链 |
 
 ---
 
-## 🛠️ 安装与配置
+## 🌟 主要功能
 
-### 1. 环境依赖
+### 1. 🤖 多智能体协作架构
+系统由 5 个 Agent 协作完成审计任务，各司其职：
 
-- **Python 3.11+**
-- **Foundry** (Anvil + Cast): 用于本地极速分叉仿真 [getfoundry.sh](https://getfoundry.sh)
-- **Node RPC**: 以太坊和 BSC 的 RPC（免费版即可）
-- **LLM API Key**: 推荐七牛云（兼容 OpenAI 格式）或智谱直连
+| Agent | 职责 |
+|-------|------|
+| **CoordinatorAgent** | 编排调度，管理审计流水线，决策是否触发深度分析 |
+| **ScannerAgent** | 实时监听 DEX 新交易对（PairCreated 事件） |
+| **SandboxAgent** | 在 Anvil 分叉网络中执行买卖仿真和攻防推演 |
+| **AuditorAgent** | 基于规则引擎 + LLM 进行代码安全评估 |
+| **ReporterAgent** | 生成 Markdown 审计报告，支持 AI 问答 |
 
-### 2. 克隆与安装
+### 2. 🌐 双链支持
+- **Ethereum 主网** — Uniswap V2 新交易对监控
+- **BSC（币安智能链）** — PancakeSwap V2 新交易对监控
+
+### 3. 🧪 Anvil 沙盒仿真
+- 使用 Foundry 的 Anvil 在本地极速分叉主网
+- 模拟真实的买入/卖出交易，精确计算买卖税率和 Gas 消耗
+- 动态端口分配，避免并发仿真冲突
+
+### 4. ⚔️ Rug-Pull 攻防推演
+- **权限劫持**：通过 `anvil_impersonateAccount` 接管合约 Owner
+- **自动化攻击**：尝试 `setBlacklist`、`setTaxFeePercent(99)`、`pauseTrading` 等恶意调用
+- **状态验证**：攻击后再次仿真买卖，确认用户是否无法出售
+- **实锤判定**：自动标记蜜罐并附带攻击证据
+
+### 5. 🧠 LLM 智能审计
+- 通过 Etherscan/BscScan V2 API 获取合约开源代码
+- 调用 GLM 大语言模型进行深度代码分析
+- 自动识别隐藏增发、黑名单、权限后门等高危漏洞
+
+### 6. 💬 Chat with Contract
+- 对最新审计报告提问，LLM 基于源码数据实时回答
+- 示例："这个代币为什么有 HONEYPOT 标签？"
+
+### 7. 📡 实时前端仪表盘
+- Streamlit 构建的 Web UI，支持无感自动刷新
+- 实时日志流：后台扫描进度同步显示在前端
+- 双 Tab 报告展示：实时报告 + 历史报告归档
+
+---
+
+## 🏗️ 技术栈
+
+| 类别 | 技术 |
+|------|------|
+| **编程语言** | Python 3.10+ |
+| **Web3 交互** | web3.py (AsyncWeb3, AsyncHTTPProvider) |
+| **分叉仿真** | Foundry (Anvil + Cast) |
+| **前端** | Streamlit + st_autorefresh |
+| **数据模型** | Pydantic V2 + pydantic-settings |
+| **数据库** | SQLAlchemy 2.0 + aiosqlite (SQLite) |
+| **HTTP 客户端** | httpx (Etherscan API), aiohttp (Web3) |
+| **LLM 集成** | OpenAI SDK (兼容 GLM / DeepSeek / GPT) |
+| **日志系统** | Loguru |
+| **异步框架** | asyncio + threading (后台循环) |
+| **区块链浏览器** | Etherscan V2 API / BscScan V2 API |
+
+---
+
+## 🛠️ 安装与运行
+
+### 1. 环境要求
+
+- **Python 3.10+**  
+- **Foundry**（包含 Anvil 和 Cast）：[安装 Foundry](https://getfoundry.sh)
+  ```bash
+  curl -L https://foundry.paradigm.xyz | bash
+  foundryup
+  ```
+- **RPC 节点**：Alchemy / Infura / QuickNode 等（免费版即可）
+- **LLM API Key**：七牛云 / 智谱 GLM / OpenAI 等兼容 OpenAI 格式的 API
+
+### 2. 克隆与安装依赖
 
 ```bash
+git clone https://github.com/Ma0xFly/memescan.git
 cd MemeScan
-python3 -m venv .venv 
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. 配置 .env
+### 3. 配置环境变量
 
-复制配置模板：
+复制配置模板并编辑：
+
 ```bash
 cp .env.example .env
 ```
-编辑 `.env` 文件，填入核心配置：
+
+打开 `.env` 文件，填入以下**必填**配置：
 
 ```env
-# ── RPC 节点配置 ──
-RPC_URL=你的以太坊_RPC_地址 (如 Alchemy/Infura)
+# ── RPC 节点 (必填) ──────────────────────────────────────────
+RPC_URL=https://eth-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
 BSC_RPC_URL=https://bsc-dataseed.binance.org/
 
-# ── 浏览器 API (获取源码用) ──
-ETHERSCAN_API_KEY=你的Etherscan_Key
-BSCSCAN_API_KEY=你的BscScan_Key
+# ── 区块链浏览器 API Key (推荐填写，用于获取合约源码) ─────────
+ETHERSCAN_API_KEY=你的_Etherscan_API_Key
+BSCSCAN_API_KEY=你的_BscScan_API_Key
 
-# ── LLM 配置 (七牛云或智谱) ──
-LLM_API_KEY=你的七牛云_API_KEY
-LLM_BASE_URL=https://api.qnaigc.com/v1     # 七牛云端点
-LLM_MODEL=glm-4.5-air                      # 使用的模型
+# ── LLM 大模型 (必填，用于智能审计和 Chat) ───────────────────
+LLM_API_KEY=你的_LLM_API_Key
+LLM_BASE_URL=https://api.qnaigc.com/v1          # 七牛云端点
+LLM_MODEL=glm-4.5-air                           # 模型名称
 ```
 
----
+> **免费 API Key 获取方式：**
+> - Alchemy RPC：[alchemy.com](https://www.alchemy.com/) 注册即获免费 Key
+> - Etherscan API：[etherscan.io/myapikey](https://etherscan.io/myapikey) 注册即获免费 Key
+> - BscScan API：[bscscan.com/myapikey](https://bscscan.com/myapikey) 注册即获免费 Key
 
-## 🚀 使用指南
-
-启动 Streamlit 仪表盘：
+### 4. 启动应用
 
 ```bash
 streamlit run app.py
 ```
 
-打开浏览器访问 `http://localhost:8501`。
-
-### 1. ⚙️ 侧边栏及配置面板
-- **RPC 连接状态**: 系统启动时会自动检测你所选链（Ethereum 或 BSC）的 RPC 连通性，并显示连接状态。
-- **🔎 实时监控 (Auto-Scan)**:
-  - 在下拉菜单选择目标链（Ethereum 或 BSC）。
-  - 点击 **▶️ 启动监控**。系统会在后台使用 asyncio 并发监听 DEX (Uniswap V2 / PancakeSwap V2) 的 `PairCreated` 新交易对事件。当探测到新币时，自动执行“沙盒买卖仿真 ➡️ 代码大模型审计”全流程。
-- **🎯 手动扫描 (Manual Scan)**:
-  - 输入任何已发行的代币合约地址即可强制对其进行深度审计。
-  - **进度可视化**: 点击扫描后，下方会出现实时滚动的日志框，将后台 Agent 的动作（如分叉节点、买单/卖单模拟、触发规则、调用 LLM）零延迟同步到前端展示。
-
-> 💡 **手动扫描测试地址（带开源验证合约的经典 Meme 币）**
-> 
-> **Ethereum 链测试币:**
-> - **SHIB (Shiba Inu)**: `0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce` (经典狗狗币)
-> - **PEPE**: `0x6982508145454Ce325dDbE47a25d4ec3d2311933` (代码已完全放弃所有权)
-> - **FLOKI**: `0xcf0C122c6b73ff809C693CE761CAA2fd6A5A0D51` (带有复杂分红/税率机制)
-> - **WBTC**: `0x2260fac5e5542a773aa44fbcfedf7c193bc2c599` (可能触发隐藏增发标签)
->
-> **BSC 链测试币:**
-> - **BabyDoge**: `0xc748673057861a797275CD8A068AbB95A902e8de` (通缩分红型)
-> - **DOGE (Binance-Peg)**: `0xbA2aE424d960c26247Dd6c32edC70B295c744C43`
-
-### 2. 🖥️ 主控台功能
-- **📊 实时状态板**: 顶部实时统计“历史报告总数”、“本次运行新增数”、“本次扫出的蜜罐”和“高风险代币”数量。
-- **双引擎报告展示**:
-  - **📡 实时报告 Tabs**: 默认展示本次运行期间所有扫描产生的报告。点击折叠面板可以查阅买卖税率明细、Gas 消耗、安全标签判定流程，以及大模型针对该代币输出的深度分析文段。
-  - **📁 历史报告 Tabs**: 自动读取 `reports/` 目录中的 markdown 存储件，并以日期进行智能归档和降序罗列，即使服务重启数据也不会丢失。
-- **💬 Chat with Contract**: 
-  - 页面最下方配置了 AI 聊天框。系统会自动读取最近一次扫描的代币源码审计数据作为上下文。
-  - 提问范例：“这个代币为什么有 HONEYPOT 标签？” 或 “解释下第 120 行 owner() 权限的影响”
-  - LLM 会基于刚拉取的源码数据为你充当私人代码安全顾问。
-- **📜 实时事件日志**:
-  - 页面底部通过截流 `Loguru`，将所有后台多智能体协作、RPC 报错、API 调用的运行轨迹毫秒级打印在前端终端，供进阶开发者监控服务状态。
+启动后，打开浏览器访问 `http://localhost:8501` 即可使用。
 
 ---
 
-## 📁 目录结构 (V2)
+## 🚀 使用指南
+
+### 实时监控模式
+
+1. 在左侧边栏 **"🔎 实时监控"** 下拉选择目标链（Ethereum / BSC）
+2. 点击 **▶️ 启动监控**
+3. 系统会自动监听链上新交易对，发现新代币后自动执行完整审计流程
+4. 结果会实时显示在右侧 **📡 实时报告** 标签页中
+
+### 手动扫描模式
+
+1. 在左侧边栏 **"🎯 手动扫描"** 区域选择目标链
+2. 在输入框中粘贴代币合约地址
+3. 点击 **🔬 扫描代币**
+4. 状态框中会实时滚动显示扫描进度
+
+### � 测试用代币地址
+
+以下代币均已在链上开源验证，适合用来测试系统功能：
+
+**Ethereum 主网：**
+
+| 代币 | 合约地址 | 特点 |
+|------|---------|------|
+| SHIB | `0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce` | 标准 ERC20，经典 Meme 币 |
+| PEPE | `0x6982508145454Ce325dDbE47a25d4ec3d2311933` | 已放弃所有权 (Renounced) |
+| FLOKI | `0xcf0C122c6b73ff809C693CE761CAA2fd6A5A0D51` | 含有分红和税率机制 |
+| WBTC | `0x2260fac5e5542a773aa44fbcfedf7c193bc2c599` | 可能触发隐藏增发标签 |
+
+**BSC 链：**
+
+| 代币 | 合约地址 | 特点 |
+|------|---------|------|
+| BabyDoge | `0xc748673057861a797275CD8A068AbB95A902e8de` | 通缩机制 + 自动分红 |
+| DOGE (Peg) | `0xbA2aE424d960c26247Dd6c32edC70B295c744C43` | Binance 锚定版 DOGE |
+
+---
+
+## 📁 项目结构
 
 ```
 MemeScan/
-├── agents/                    # 🤖 V2 核心 Agent 层
-│   ├── base.py               # Agent 基类 (提供 run 与 decide 接口)
-│   ├── coordinator.py        # 编排调度者 (分发任务,判断是否深度分析)
-│   ├── scanner.py            # 封装链上监听
-│   ├── sandbox.py            # 封装 Anvil 并发锁仿真
-│   ├── auditor.py            # 规则+大模型深度审计
-│   └── reporter.py           # 报告构建与 Chat 回答
+├── app.py                     # �️ Streamlit 前端入口
 │
-├── services/                  # 🔧 V1 遗留并升级的底层服务
-│   ├── monitor.py            # Web3 PairCreated 监听
-│   ├── simulator.py          # 包含 Cast / Anvil 命令调用的底层实现
-│   ├── analyzer.py           
-│   ├── etherscan.py          # 动态匹配 Etherscan / BscScan
-│   └── token_info.py         
+├── agents/                    # 🤖 Multi-Agent 层
+│   ├── base.py               # Agent 基类 (run / decide / log)
+│   ├── coordinator.py        # 编排调度 Agent
+│   ├── scanner.py            # 链上监听 Agent
+│   ├── sandbox.py            # Anvil 仿真 + 攻防推演 Agent
+│   ├── auditor.py            # 规则引擎 + LLM 审计 Agent
+│   └── reporter.py           # 报告生成 + Chat Agent
 │
-├── core/                      # 基础单例配置与依赖
-├── domain/                    # Pydantic 领域强类型定义
-├── reports/                   # 自动储存的 .md 单次报告留存库
-└── app.py                     # Streamlit 渲染入口
+├── services/                  # 🔧 底层服务层
+│   ├── monitor.py            # Web3 PairCreated 事件轮询
+│   ├── simulator.py          # Anvil/Cast 仿真引擎
+│   ├── analyzer.py           # 规则引擎分析器
+│   ├── etherscan.py          # Etherscan/BscScan V2 API 客户端
+│   └── token_info.py         # 代币元数据查询
+│
+├── core/                      # ⚙️ 基础设施层
+│   ├── config.py             # pydantic-settings 配置单例
+│   ├── web3_provider.py      # AsyncWeb3 Provider 工厂
+│   ├── logging.py            # Loguru 日志配置
+│   └── db.py                 # SQLAlchemy 异步数据库引擎
+│
+├── domain/                    # 📦 领域模型层
+│   └── models.py             # Token, SimulationResult, AuditReport
+│
+├── reports/                   # 📄 审计报告存储 (Markdown)
+├── .env.example               # 环境变量配置模板
+├── requirements.txt           # Python 依赖列表
+└── README.md                  # 本文档
 ```
+
+---
+
+## 🔮 系统架构
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                    Streamlit Frontend                     │
+│  ┌──────────┐  ┌──────────┐  ┌───────────┐  ┌────────┐  │
+│  │ 状态面板  │  │ 实时报告  │  │ 历史报告   │  │ AI Chat│  │
+│  └──────────┘  └──────────┘  └───────────┘  └────────┘  │
+└──────────────────────┬───────────────────────────────────┘
+                       │
+┌──────────────────────▼───────────────────────────────────┐
+│              CoordinatorAgent (编排调度)                   │
+│         ┌────────────┼────────────┐                      │
+│         ▼            ▼            ▼                      │
+│  ┌─────────┐  ┌──────────┐  ┌──────────┐                │
+│  │ Sandbox │  │ Auditor  │  │ Reporter │                │
+│  │  Agent  │  │  Agent   │  │  Agent   │                │
+│  └────┬────┘  └────┬─────┘  └──────────┘                │
+│       │            │                                     │
+│       ▼            ▼                                     │
+│ ┌──────────┐ ┌───────────┐ ┌──────────┐                 │
+│ │Simulator │ │ Analyzer  │ │Etherscan │                  │
+│ │ Service  │ │  Service  │ │ Service  │                  │
+│ │(Anvil)   │ │(Rules)    │ │(V2 API)  │                  │
+│ └──────────┘ └───────────┘ └──────────┘                  │
+└──────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🔐 安全与隐私
+
+- 前端日志自动脱敏，不会泄露 RPC Key 和本地路径
+- 所有仿真交易均在本地 Anvil 分叉网络中执行，**不会**发送任何真实链上交易
+- 敏感配置通过 `.env` 文件管理，已加入 `.gitignore`
+
+---
+
+## 📊 部署说明
+
+### 本地开发部署
+
+```bash
+# 1. 安装依赖
+pip install -r requirements.txt
+
+# 2. 安装 Foundry
+curl -L https://foundry.paradigm.xyz | bash && foundryup
+
+# 3. 配置 .env
+cp .env.example .env   # 编辑填入你的 API Key
+
+# 4. 启动
+python3 -m streamlit run app.py
+```
+
+### 生产部署建议
+
+- 使用 **systemd** 或 **Docker** 保持服务常驻
+- 配置 **Nginx** 反向代理 Streamlit 的 8501 端口
+- 推荐使用付费 RPC 节点以获得更高频率的轮询支持
+- 定期清理 `reports/` 目录中的历史报告文件
+
+---
 
 ## 📜 许可证
 
-MIT
+本项目采用 [MIT License](https://opensource.org/licenses/MIT) 开源许可证。
+
+```
+MIT License
+
+Copyright (c) 2026 MemeScan
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+```
